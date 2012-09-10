@@ -115,6 +115,10 @@
       (dosync (alter *registry* assoc id type)))
     true))
 
+(defn registed-type
+  [id]
+  (get @*registry* id))
+
 ;; clojure.contrib.map-utils - chouser
 (defn deep-merge-with
   "Like merge-with, but merges maps recursively, applying the given fn
@@ -151,9 +155,9 @@
   [tpl data]
   (cond
     (sequential? tpl)
-    (let [ct (count tpl) cd (count data)] 
+    (let [ct (count tpl) cd (count data)]
       (if (every? map? [(first tpl) (first data)])
-        (map (fn [a b] (deep-merge-with merge-with-template a b)) tpl (take ct data))
+        (map (fn [a b] (deep-merge-with merge-with-template a b)) tpl (concat (take ct data) (drop cd tpl)))
         (if (< cd ct)
           (concat data (drop cd tpl))
           (take ct data))))
@@ -170,7 +174,7 @@
   (map
     (fn [[id t len]]
       (if-let [e (get @*registry* t)]
-        (let [e (if len (element-array* e len) e)
+        (let [e (if (and len (pos? len)) (element-array* e len) e)
               s (sizeof e)
               stride (if (pos? (:align *config*))
                        (ceil-multiple-of (:align *config*) s)
@@ -239,7 +243,10 @@
       (dependencies [this]
         (dependencies this (dep/graph)))
       (dependencies [this g]
-        (let [deps (filter #(not (primitive? %)) (vals spec-map))
+        (let [deps (into #{}
+                     (map
+                       #(if (pos? (length %)) (element-type %) %)
+                       (filter #(not (primitive? %)) (vals spec-map))))
               g (reduce (fn [g t] (dependencies t g)) g deps)]
           (reduce (fn [g t] (dep/depend g this t)) g deps)))
       (gen-source* [this]
