@@ -1,4 +1,7 @@
 (ns structgen.core
+  (:import
+    [java.text SimpleDateFormat]
+    [java.util Date])
   (:require
     [gloss [core :as gc] [io :as gio]]
     [clojure.data.dependency :as dep]))
@@ -157,7 +160,8 @@
     (sequential? tpl)
     (let [ct (count tpl) cd (count data)]
       (if (every? map? [(first tpl) (first data)])
-        (map (fn [a b] (deep-merge-with merge-with-template a b)) tpl (concat (take ct data) (drop cd tpl)))
+        (map (fn [a b] (deep-merge-with merge-with-template a b))
+             tpl (concat (take ct data) (drop cd tpl)))
         (if (< cd ct)
           (concat data (drop cd tpl))
           (take ct data))))
@@ -169,6 +173,13 @@
   [a b]
   (let [r (rem b a)] (if (zero? r) b (- (+ b a) r))))
 
+(defn build-align-spec*
+  [gap]
+  (when (pos? gap)
+    {:gid (keyword (gensym "sg__"))
+     :gcode (gc/compile-frame (repeat gap :byte))
+     :gdata (vec (repeat gap 0))}))
+
 (defn build-spec*
   [fields]
   (map
@@ -176,22 +187,10 @@
       (if-let [e (get @*registry* t)]
         (let [e (if (and len (pos? len)) (element-array* e len) e)
               s (sizeof e)
-              stride (if (pos? (:align *config*))
-                       (ceil-multiple-of (:align *config*) s)
-                       s)
-              gap (- stride s)
-              [gid gcode gdata]
-              (when (pos? gap)
-                [(keyword (gensym))
-                 (gc/compile-frame (repeat gap :byte))
-                 (vec (repeat gap 0))])]
-          {:id id
-           :element e
-           :codec (compile-type e)
-           :tpl (template e true)
-           :gid gid
-           :gcode gcode
-           :gdata gdata})
+              align (:align *config*)
+              stride (if (pos? align) (ceil-multiple-of align s) s)
+              gap (- stride s)]
+          (merge {:id id :element e} (build-align-spec* gap)))
         (throw (IllegalArgumentException. (str "unknown type " t)))))
     fields))
 
@@ -199,23 +198,24 @@
   [spec]
   (apply merge
     (concat
-      (map (fn [x] {(:id x) (:tpl x)}) spec)
-      (map (fn [x] {(:gid x) (:gdata x)}) (filter :gid spec)))))
+      (map (fn [{:keys [id element]}] {id (template element true)}) spec)
+      (map (fn [{:keys [gid gdata]}] {gid gdata}) (filter :gid spec)))))
 
 (defn build-codec*
   [spec]
   (reduce
-    (fn [acc {:keys [id codec gid gcode]}]
+    (fn [acc {:keys [id element gid gcode]}]
       (if gid
-        (conj acc id codec gid gcode)
-        (conj acc id codec)))
+        (conj acc id (compile-type element) gid gcode)
+        (conj acc id (compile-type element))))
     [] spec))
 
 (defn- header
   []
-  (str "/* generated @ "
-       (.format (java.text.SimpleDateFormat. "yyyy-MM-dd HH:mm:ss") (java.util.Date.))
-       " by com.postspectacular/structgen */\n\n"))
+  (str
+    "/* generated @ "
+    (.format (SimpleDateFormat. "yyyy-MM-dd HH:mm:ss") (Date.))
+    " by com.postspectacular/structgen */\n\n"))
 
 (defn make-struct
   [tname & fields]
