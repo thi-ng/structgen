@@ -6,9 +6,9 @@
 
 (dosync (ref-set *registry* @(make-registry)))
 
-(def t
-  (parse-typedefs
+(def src
 "#define _FLOAT_ double
+#define NUM_LIGHTS 8
 
 typedef struct {
   _FLOAT_ x;
@@ -29,21 +29,22 @@ typedef struct {
 
 typedef struct {
   Camera cam;
-  Vec3 lights[8];
+  Vec3 lights[NUM_LIGHTS];
   Vec2 mouse;
   _FLOAT_ col[4];
-} RSpec;"))
+} RSpec;")
 
-(pprint t)
+(pprint (parse src))
 
-(register! (parsetree->specs t))
+(register! (parse-specs src))
 
 (println (gen-source (registed-type :RSpec)))
 
-(decode (registed-type :RSpec)
-        (encode (:RSpec @*registry*)
-                {:cam {:pos {:x 400 :y 100 :z -1000} :up {:y 1}}
-                 :lights [{:x 1 :y 2 :z 3} {:x 100 :y 1000 :z 10000}]
-                 :mouse {:x 200 :y 600}
-                 :col [0.8 0.9 1.0 0.5]}))
-
+(decode
+  (registed-type :RSpec)
+  (encode
+    (registed-type :RSpec)
+    {:cam {:pos {:x 400 :y 100 :z -1000} :up {:y 1}}
+     :lights [{:x 1 :y 2 :z 3} {:x 100 :y 1000 :z 10000}]
+     :mouse {:x 200 :y 600}
+     :col [0.8 0.9 1.0 0.5]}))

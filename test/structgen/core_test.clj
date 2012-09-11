@@ -3,7 +3,7 @@
 
 (dosync (ref-set *registry* @(make-registry)))
 
-(core/register!
+(register!
   [[:Vec2 [:x :float] [:y :float]]
    [:Vec3 [:x :float] [:y :float] [:z :float]]
    [:Camera [:pos :Vec3] [:target :Vec3] [:up :Vec3]]
