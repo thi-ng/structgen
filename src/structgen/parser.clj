@@ -39,11 +39,15 @@
 	{:tag t :content c})
 
 (defn preprocess
-  [src]
-  (let [defines (re-seq c-define src)]
-    (reduce
-      (fn[s [o d r]] (-> s (string/replace o "") (string/replace d r)))
-      src defines)))
+  ([src & {:as userdefs}]
+    (prn userdefs)
+    (let [defines (re-seq c-define src)]
+      (reduce
+        (fn[s [o d r]]
+          (-> s
+            (string/replace o "")
+            (string/replace d (str (get userdefs (keyword d) r)))))
+        src defines))))
 
 (def parser
   (p/parser
