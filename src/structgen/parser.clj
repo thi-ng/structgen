@@ -76,9 +76,9 @@
     (filter #(= :typedef (:tag %)) (:content tree))))
 
 (defn parse
-  [src]
-  (-> src (preprocess) (parser)))
+  [src & userdefs]
+  (parser (apply preprocess src userdefs)))
 
 (defn parse-specs
-  [src]
-  (-> src (preprocess) (parser) (tree->specs)))
+  [src & userdefs]
+  (-> (apply preprocess src userdefs) (parser) (tree->specs)))
