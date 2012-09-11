@@ -10,7 +10,7 @@
 
 (defmacro with-config
   [config & body]
-  `(binding [*config* (merge *config* config)]
+  `(binding [*config* (merge *config* ~config)]
      (do ~@body)))
 
 (defprotocol StructElement
