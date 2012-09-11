@@ -118,7 +118,7 @@
       (dosync (alter *registry* assoc id type)))
     true))
 
-(defn registed-type
+(defn registered-type
   [id]
   (get @*registry* id))
 
