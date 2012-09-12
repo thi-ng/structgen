@@ -1,5 +1,7 @@
 (ns clojure.data.dependency
   "Bidirectional graphs of dependencies and dependent objects."
+  ^{:author "Stuart Sierra"
+    :url "https://github.com/stuartsierra/data.dependency"}
   (:use [clojure.set :only (union)]))
 
 (defprotocol DependencyGraph
