@@ -1,4 +1,11 @@
 (ns structgen.core
+  "Utilities to seamlessly work with native C structs.
+  Provides a C typedef parser and extensible struct generators
+  for converting between Clojure maps and memory aligned
+  byte buffers. Supports nested structs, arrays, custom C
+  primitives (e.g as used by OpenCL) and endianess.
+  Can generate C source from Clojure defined structs."
+  ^{:author "Karsten Schmidt"}
   (:import
     [java.text SimpleDateFormat]
     [java.util Date]
@@ -15,15 +22,18 @@
      (do ~@body)))
 
 (defprotocol StructElement
+  "Defines common functionality for primitives, primitive vectors,
+  arrays and composite types (structs)."
   (cdeclare [this id]
-    "Returns the C declaration for this element and given symbol id.")
+    "Returns the C declaration for this element and given symbol id.
+    E.g. `float x[100];`")
   (cname [this]
     "Returns the element's C type name.")
   (compile-type [this]
     "Returns an element's compiled gloss frame.
     Where applicable chooses endianess based on current `*config*` setting.")
   (element-type [this]
-    "Returns the element type StructField implementation.")
+    "Returns the element type `StructField` implementation.")
   (length [this]
     "Returns the element's array length (zero for single values).")
   (primitive? [this]
@@ -34,6 +44,7 @@
     "Returns the element's data template: map for structs, vector for arrays"))
 
 (defprotocol Struct
+  "Defines functionality only available for composite types (structs)."
   (encode ^ByteBuffer [this m]
     "Encodes the map `m` into a byte buffer. Missing values are replaced
     with values from the template.")
@@ -52,7 +63,11 @@
     this struct and all required dependencies (in correct order)."))
 
 (defn primitive*
-  "Returns a StructElement implementation for the given primitive type description." 
+  "Returns a `StructElement` implementation for the given primitive type description:
+
+      cname - C type name
+      type - gloss codec type
+      size - size in bytes" 
   [cname type size]
   (reify
     StructElement
@@ -71,7 +86,22 @@
     (template [this _] 0)))
 
 (defn primitive-vec*
-  "Returns a StructElement implementation for the given vector primitive type description." 
+  "Returns a `StructElement` implementation for the given vector primitive type description.
+  E.g. OpenCL extends C with vector prims like `float4` which technically are like arrays,
+  but differ in their C declarations:
+  
+      float x[4]; // 4-element C array
+      float4 x; // float4 primitive
+
+  Function arguments:
+
+      cname - C type name
+      type - StructElement implementation of this vectors element type
+      len - number of elements
+
+  Example:
+
+      (primitive-vec* \"char2\" (lookup :char) 2)"
   [cname type len]
   (reify
     StructElement
@@ -87,7 +117,9 @@
     (template [this _] (vec (repeat len 0)))))
 
 (defn element-array*
-  "Returns a StructElement implementation for the given element array description."
+  "Returns a `StructElement` implementation for the given element array description.
+  Arrays can be created for any type (primitives, primitive vecs, structs). Currently
+  only supports 1-dimensional arrays."
   ([e len] (element-array* e len (cname e)))
   ([e len cname]
     (reify
@@ -122,9 +154,11 @@
   ([r] (dosync (ref-set *registry* (or r (make-registry))))))
 
 (defmacro with-registry
-  "Binds the current type `*registry*` to the supplied map and
-  executes body in a `do` form. The given registry value is
-  automatically wrapped in or converted to a ref (if not already)."
+  "Binds the type `*registry*` to the supplied map and executes body
+  in a `do` form. The given registry value is automatically wrapped
+  in or converted to a ref (if not already).
+  If the custom registry is supposed to be used outside the macro
+  scope at a later time, it **must** already be wrapped in a ref."
   [r & body]
   `(let [r# ~r]
      (binding [*registry*
@@ -139,12 +173,12 @@
 (declare make-struct)
 
 (defn register!
-  "Registers a pre-build struct or type with the given id or builds and registers
-  a number of structs for the given specs. Throws IllegalArgumentException
-  for duplicate IDs. Returns the last type registered.
-  Each spec is a vector of: [typename & fields]
-
-  Examples:
+  "Registers a pre-build struct or type with the given `id` or builds and
+  registers a number of structs for the given specs.
+  Throws IllegalArgumentException for duplicate IDs.
+  Returns the last type registered.
+  
+  Each spec is a vector of: `[typename & fields]`
 
       ; declare a primitive OpenCL type
       (register! :float3 (primitive-vec* \"float3\" (lookup :float) 3))
@@ -165,15 +199,15 @@
       (dosync (alter *registry* assoc id type)))
     type))
 
-;; clojure.contrib.map-utils - chouser
 (defn deep-merge-with
   "Like merge-with, but merges maps recursively, applying the given fn
   only when there's a non-map at a particular level.
 
-  (deep-merge-with +
-    {:a {:b {:c 1 :d {:x 1 :y 2}} :e 3} :f 4}
-    {:a {:b {:c 2 :d {:z 9} :z 3} :e 100}})
-  -> {:a {:b {:z 3, :c 3, :d {:z 9, :x 1, :y 2}}, :e 103}, :f 4}"
+      (deep-merge-with +
+        {:a {:b {:c 1 :d {:x 1 :y 2}} :e 3} :f 4}
+        {:a {:b {:c 2 :d {:z 9} :z 3} :e 100}})
+      => {:a {:b {:z 3, :c 3, :d {:z 9, :x 1, :y 2}}, :e 103}, :f 4}"
+  ^{:author "Chris Houser"}
   [f & maps]
   (apply
     (fn m [& maps]
@@ -185,16 +219,16 @@
 (defn deep-select-keys
   [m struct]
   (reduce
-    (fn [acc [k v]]
+    (fn [m [k v]]
       (if-let [ks (k (struct-spec struct))]
-        (assoc acc k 
+        (assoc m k 
           (cond
             (map? v)
               (deep-select-keys v ks)
             (and (sequential? v) (not (primitive? ks)))
               (map #(deep-select-keys % (element-type ks)) v)
             :default v))
-        acc))
+        m))
     {} m))
 
 (defn merge-with-template
