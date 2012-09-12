@@ -73,14 +73,11 @@
     StructElement
     (cname [this] cname)
     (compile-type [this]
-      (gc/compile-frame
-        (if (> size 1)
-          (keyword (str (name type) (if (:le *config*) "-le" "-be")))
-          type)))
+      (gc/compile-frame (repeat len (compile-type type))))
     (element-type [this] type)
     (length [this] len)
     (primitive? [this] true)
-    (sizeof [this] size)
+    (sizeof [this] (* len size))
     (template [this] (template this true))
     (template [this _] (vec (repeat len 0)))))
 
@@ -263,6 +260,7 @@
       StructElement
       (cname [this] (name tname))
       (compile-type [this] frame)
+      (element-type [this] this)
       (length [this] 0)
       (primitive? [this] false)
       (sizeof [this] size)
@@ -273,7 +271,7 @@
       (encode [this m]
         (gio/encode frame (deep-merge-with merge-with-template tpl m)))
       (decode [this bytes]
-        (gio/decode frame bytes))
+        (deep-select-keys (gio/decode frame bytes) this))
       (dependencies [this]
         (dependencies this (dep/graph)))
       (dependencies [this g]
