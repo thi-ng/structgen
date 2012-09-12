@@ -22,7 +22,7 @@
     "Returns an element's compiled gloss frame.
     Where applicable chooses endianess based on current `*config*` setting.")
   (element-type [this]
-    "Returns the element type.")
+    "Returns the element type StructField implementation.")
   (length [this]
     "Returns the element's array length (zero for single values).")
   (primitive? [this]
@@ -140,8 +140,12 @@
 
   Examples:
 
-      (register! :Foo (make-struct 'Foo [:a :float 4] [:b :int]))
+      ; declare a primitive OpenCL type
+      (register! :float3 (primitive-vec* \"float3\" (registered-type :float) 3))
+      ; create a struct of a 3-element float3 array & single uint
+      (register! :Face (make-struct 'Face [:verts :float3 3] [:color :uint]))
 
+      ; register multiple types at once using make-struct
       (register!
         [[:Vec3 [:x :float] [:y :float] [:z :float]]
          [:Camera [:pos :Vec3] [:target :Vec3] [:up :Vec3]]])"
