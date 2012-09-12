@@ -14,8 +14,10 @@
      (do ~@body)))
 
 (defprotocol StructElement
+  (cdeclare [this id]
+    "Returns the C declaration for this element and given symbol id.")
   (cname [this]
-    "Returns an element's C type name.")
+    "Returns the element's C type name.")
   (compile-type [this]
     "Returns an element's compiled gloss frame.
     Where applicable chooses endianess based on current `*config*` setting.")
@@ -45,14 +47,15 @@
   (gen-source* [this]
     "Generates C source for the typedef of this struct.")
   (gen-source [this]
-    "Generates C source for the typedef of this struct and all required
-    dependencies (in order)."))
+    "Builds a dependency graph and generates C source for the typedef of
+    this struct and all required dependencies (in correct order)."))
 
 (defn primitive*
   "Returns a StructElement implementation for the given primitive type description." 
   [cname type size]
   (reify
     StructElement
+    (cdeclare [this id] (str cname " " id ";"))
     (cname [this] cname)
     (compile-type [this]
       (gc/compile-frame
@@ -68,26 +71,28 @@
 
 (defn primitive-vec*
   "Returns a StructElement implementation for the given vector primitive type description." 
-  [cname type size len]
+  [cname type len]
   (reify
     StructElement
+    (cdeclare [this id] (str cname " " id ";"))
     (cname [this] cname)
     (compile-type [this]
       (gc/compile-frame (repeat len (compile-type type))))
     (element-type [this] type)
     (length [this] len)
     (primitive? [this] true)
-    (sizeof [this] (* len size))
+    (sizeof [this] (* len (sizeof type)))
     (template [this] (template this true))
     (template [this _] (vec (repeat len 0)))))
 
 (defn element-array*
   "Returns a StructElement implementation for the given element array description."
   ([e len] (element-array* e len (cname e)))
-  ([e len cn]
+  ([e len cname]
     (reify
       StructElement
-      (cname [this] cn)
+      (cdeclare [this id] (str cname " " id "[" len "];"))
+      (cname [this] cname)
       (compile-type [this]
         (gc/compile-frame (repeat len (compile-type e))))
       (element-type [this] e)
@@ -250,7 +255,8 @@
 
 (defn make-struct
   [tname & fields]
-  (let [spec (build-spec* fields)
+  (let [tname (name tname)
+        spec (build-spec* fields)
         tpl (build-template* spec)
         codec (build-codec* spec)
         frame (gc/compile-frame (apply gc/ordered-map codec))
@@ -258,7 +264,8 @@
         spec-map (reduce (fn [acc {:keys[id element]}] (assoc acc id element)) {} spec)]
     (reify
       StructElement
-      (cname [this] (name tname))
+      (cdeclare [this id] (str tname " " id ";"))
+      (cname [this] tname)
       (compile-type [this] frame)
       (element-type [this] this)
       (length [this] 0)
@@ -285,14 +292,9 @@
         (apply str
           "typedef struct {\n"
           (concat
-            (mapcat
-              (fn [{:keys [id element]}]
-                (let [[id cn len] [(name id) (cname element) (length element)]]
-                  (if (pos? (length element)) 
-                    ["  " cn " " id "[" len "];\n"]
-                    ["  " cn " " id ";\n"])))
-              spec)
-            ["} " (name tname) ";\n\n"])))
+            (mapcat (fn [{:keys [id element]}]
+                      ["  " (cdeclare element (name id)) "\n"]) spec)
+            ["} " tname ";\n\n"])))
       (gen-source [this]
         (let [g (dependencies this)
               deps (dep/transitive-dependencies g this)
