@@ -287,9 +287,8 @@
         (dependencies this (dep/graph)))
       (dependencies [this g]
         (let [deps (into #{}
-                     (map
-                       #(if (pos? (length %)) (element-type %) %)
-                       (filter #(not (primitive? %)) (vals spec-map))))
+                     (map #(if (pos? (length %)) (element-type %) %)
+                       (filter (complement primitive?) (vals spec-map))))
               g (reduce (fn [g t] (dependencies t g)) g deps)]
           (reduce (fn [g t] (dep/depend g this t)) g deps)))
       (gen-source* [this]
