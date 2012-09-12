@@ -66,34 +66,69 @@
     (template [this] 0)
     (template [this _] 0)))
 
-(defn element-array*
-  "Returns a StructElement implementation for the given element array description."
-  [e len]
+(defn primitive-vec*
+  "Returns a StructElement implementation for the given vector primitive type description." 
+  [cname type size len]
   (reify
     StructElement
-    (cname [this] (cname e))
+    (cname [this] cname)
     (compile-type [this]
-      (gc/compile-frame (repeat len (compile-type e))))
-    (element-type [this] e)
+      (gc/compile-frame
+        (if (> size 1)
+          (keyword (str (name type) (if (:le *config*) "-le" "-be")))
+          type)))
+    (element-type [this] type)
     (length [this] len)
-    (primitive? [this] (primitive? e))
-    (sizeof [this] (* len (sizeof e)))
-    (template [this] (template this false))
-    (template [this all?] (vec (repeat len (template e all?))))))
+    (primitive? [this] true)
+    (sizeof [this] size)
+    (template [this] (template this true))
+    (template [this _] (vec (repeat len 0)))))
+
+(defn element-array*
+  "Returns a StructElement implementation for the given element array description."
+  ([e len] (element-array* e len (cname e)))
+  ([e len cn]
+    (reify
+      StructElement
+      (cname [this] cn)
+      (compile-type [this]
+        (gc/compile-frame (repeat len (compile-type e))))
+      (element-type [this] e)
+      (length [this] len)
+      (primitive? [this] (primitive? e))
+      (sizeof [this] (* len (sizeof e)))
+      (template [this] (template this false))
+      (template [this all?] (vec (repeat len (template e all?)))))))
 
 (defn make-registry
   "Builds a vanilla type registry populated only with primitive types."
   [& specs]
-  (ref {:char (primitive* "char" :byte 1)
-        :uchar (primitive* "unsigned char" :ubyte 1)
-        :short (primitive* "short" :int16 2)
-        :ushort (primitive* "unsigned short" :uint16 2)
-        :int (primitive* "int" :int32 4)
-        :uint (primitive* "unsigned int" :uint32 4)
-        :float (primitive* "float" :float32 4)
-        :double (primitive* "double" :float64 8)}))
+  {:char (primitive* "char" :byte 1)
+   :uchar (primitive* "unsigned char" :ubyte 1)
+   :short (primitive* "short" :int16 2)
+   :ushort (primitive* "unsigned short" :uint16 2)
+   :int (primitive* "int" :int32 4)
+   :uint (primitive* "unsigned int" :uint32 4)
+   :float (primitive* "float" :float32 4)
+   :double (primitive* "double" :float64 8)})
 
-(def ^:dynamic *registry* (make-registry))
+(def ^:dynamic *registry* (ref (make-registry)))
+
+(defn reset-registry!
+  ([] (reset-registry! nil))
+  ([r] (dosync (ref-set *registry* (or r (make-registry))))))
+
+(defmacro with-registry
+  "Binds the current type `*registry*` to the supplied map and
+  executes body in a `do` form. The given registry value is
+  automatically wrapped in or converted to a ref (if not already)."
+  [r & body]
+  `(let [r# ~r]
+     (binding [*registry*
+               (if-not (= clojure.lang.Ref (type r#))
+                 (ref (if (isa? (type r#) clojure.lang.IDeref) @r# r#)) r#)]
+       (do ~@body))))
+
 (declare make-struct)
 
 (defn register!
@@ -119,8 +154,7 @@
     true))
 
 (defn registered-type
-  [id]
-  (get @*registry* id))
+  [id] (get @*registry* id))
 
 ;; clojure.contrib.map-utils - chouser
 (defn deep-merge-with

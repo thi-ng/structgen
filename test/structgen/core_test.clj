@@ -1,7 +1,8 @@
 (ns structgen.core-test
   (:use clojure.test structgen.core))
 
-(dosync (ref-set *registry* @(make-registry)))
+;(dosync (ref-set *registry* (make-registry)))
+(reset-registry!)
 
 (register!
   [[:Vec2 [:x :float] [:y :float]]
