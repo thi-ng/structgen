@@ -1,7 +1,8 @@
 (ns structgen.core
   (:import
     [java.text SimpleDateFormat]
-    [java.util Date])
+    [java.util Date]
+    [java.nio ByteBuffer])
   (:require
     [gloss [core :as gc] [io :as gio]]
     [clojure.data.dependency :as dep]))
@@ -33,7 +34,7 @@
     "Returns the element's data template: map for structs, vector for arrays"))
 
 (defprotocol Struct
-  (encode [this m]
+  (encode ^ByteBuffer [this m]
     "Encodes the map `m` into a byte buffer. Missing values are replaced
     with values from the template.")
   (decode [this bytes]
@@ -131,12 +132,17 @@
                  (ref (if (isa? (type r#) clojure.lang.IDeref) @r# r#)) r#)]
        (do ~@body))))
 
+(defn lookup
+  "Returns the type for given id from the `*registry*`."
+  [id] (get @*registry* id))
+
 (declare make-struct)
 
 (defn register!
-  "Registers a pre-build struct with the given id or builds and registers
+  "Registers a pre-build struct or type with the given id or builds and registers
   a number of structs for the given specs. Throws IllegalArgumentException
-  for duplicate IDs. Each spec is a vector of: [typename & fields]
+  for duplicate IDs. Returns the last type registered.
+  Each spec is a vector of: [typename & fields]
 
   Examples:
 
@@ -152,15 +158,12 @@
   ([specs]
     (doseq [[id & fields] specs]
       (register! id (apply make-struct id fields)))
-    true)
+    (lookup (first (last specs))))
   ([id type]
     (if (id @*registry*)
-      (throw (IllegalArgumentException. "duplicate type"))
+      (throw (IllegalArgumentException. (str "duplicate type " id)))
       (dosync (alter *registry* assoc id type)))
-    true))
-
-(defn lookup
-  [id] (get @*registry* id))
+    type))
 
 ;; clojure.contrib.map-utils - chouser
 (defn deep-merge-with
@@ -279,24 +282,25 @@
       (template [this all?]
         (if all? tpl (deep-select-keys tpl this)))
       Struct
-      (encode [this m]
-        (gio/encode frame (deep-merge-with merge-with-template tpl m)))
+      (encode ^ByteBuffer [this m]
+        (first (gio/encode frame (deep-merge-with merge-with-template tpl m))))
       (decode [this bytes]
         (deep-select-keys (gio/decode frame bytes) this))
       (dependencies [this]
         (dependencies this (dep/graph)))
       (dependencies [this g]
-        (let [deps (into #{}
-                     (map #(if (pos? (length %)) (element-type %) %)
-                       (filter (complement primitive?) (vals spec-map))))
+        (let [deps (->> (vals spec-map)
+                        (filter (complement primitive?))
+                        (map #(if (pos? (length %)) (element-type %) %))
+                        (into #{}))
               g (reduce (fn [g t] (dependencies t g)) g deps)]
           (reduce (fn [g t] (dep/depend g this t)) g deps)))
       (gen-source* [this]
         (apply str
           "typedef struct {\n"
           (concat
-            (mapcat (fn [{:keys [id element]}]
-                      ["  " (cdeclare element (name id)) "\n"]) spec)
+            (mapcat (fn [{id :id e :element}]
+                      ["  " (cdeclare e (name id)) "\n"]) spec)
             ["} " tname ";\n\n"])))
       (gen-source [this]
         (let [g (dependencies this)
