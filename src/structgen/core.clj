@@ -141,7 +141,7 @@
   Examples:
 
       ; declare a primitive OpenCL type
-      (register! :float3 (primitive-vec* \"float3\" (registered-type :float) 3))
+      (register! :float3 (primitive-vec* \"float3\" (lookup :float) 3))
       ; create a struct of a 3-element float3 array & single uint
       (register! :Face (make-struct 'Face [:verts :float3 3] [:color :uint]))
 
@@ -159,7 +159,7 @@
       (dosync (alter *registry* assoc id type)))
     true))
 
-(defn registered-type
+(defn lookup
   [id] (get @*registry* id))
 
 ;; clojure.contrib.map-utils - chouser

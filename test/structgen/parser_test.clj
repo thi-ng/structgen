@@ -41,12 +41,12 @@ typedef struct {
 
 (register! (parse-specs src))
 
-(println (gen-source (registered-type :RSpec)))
+(println (gen-source (lookup :RSpec)))
 
 (prn (decode
-  (registered-type :RSpec)
+  (lookup :RSpec)
   (encode
-    (registered-type :RSpec)
+    (lookup :RSpec)
     {:cam {:pos {:x 400 :y 100 :z -1000} :up {:y 1}}
      :lights [{:x 1 :y 2 :z 3} {:x 100 :y 1000 :z 10000}]
      :mouse {:x 200 :y 600}
