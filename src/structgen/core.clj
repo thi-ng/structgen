@@ -15,7 +15,10 @@
   (:use
     [structgen protocols align]))
 
-(def ^:dynamic *config* {:le true :align opencl-alignment})
+(def ^:dynamic *config*
+  {:le true
+   :align-fn opencl-alignment
+   :struct-align 8})
 
 (defmacro with-config
   [config & body]
@@ -227,32 +230,39 @@
 
 (defn build-spec*
   [fields]
-  (first (reduce
-    (fn [[m offset] [id t len]]
-      (if-let [e (get @*registry* t)]
-        (let [e (if (and len (pos? len)) (element-array* e len) e)
-              s (sizeof e)
-              align (if (pos? offset) ((:align *config*) e offset) 0)
-              gap (- align offset)]
-          (prn id "size" s "offset" offset "align" align "g" gap)
-          [(conj m (merge (build-align-spec* gap) {:id id :element e})) (+ align s)])
-        (throw (IllegalArgumentException. (str "unknown type " t)))))
-    [[] 0] fields)))
+  (let[[spec offset]
+       (reduce
+         (fn [[m offset] [id t len]]
+           (if-let [e (get @*registry* t)]
+             (let [e (if (and len (pos? len)) (element-array* e len) e)
+                   s (sizeof e)
+                   align (if (pos? offset) ((:align-fn *config*) e offset) 0)
+                   gap (- align offset)]
+               (prn id "size" s "offset" offset "align" align "g" gap)
+               [(conj m (merge (build-align-spec* gap) {:id id :element e})) (+ align s)])
+             (throw (IllegalArgumentException. (str "unknown type " t)))))
+         [[] 0] fields)
+       block-fill (- (ceil-multiple-of (:struct-align *config*) offset) offset)]
+    (if (pos? block-fill)
+      (do (prn "block" block-fill)
+      (concat spec [(build-align-spec* block-fill)]))
+      spec)))
 
 (defn build-template*
   [spec]
   (apply merge
     (concat
-      (map (fn [{:keys [id element]}] {id (template element true)}) spec)
+      (map (fn [{:keys [id element]}] {id (template element true)}) (filter :id spec))
       (map (fn [{:keys [gid gdata]}] {gid gdata}) (filter :gid spec)))))
 
 (defn build-codec*
   [spec]
   (reduce
     (fn [acc {:keys [id element gid gcode]}]
-      (if gid
-        (conj acc gid gcode id (compile-type element))
-        (conj acc id (compile-type element))))
+      (cond
+        (and id gid) (conj acc gid gcode id (compile-type element))
+        gid (conj acc gid gcode)
+        :default (conj acc id (compile-type element))))
     [] spec))
 
 (defn- header
@@ -270,6 +280,7 @@
         codec (build-codec* spec)
         frame (gc/compile-frame (apply gc/ordered-map codec))
         size (gc/sizeof frame)
+        spec (filter (comp not nil? :id) spec)
         spec-map (reduce (fn [acc {:keys[id element]}] (assoc acc id element)) {} spec)]
     (reify
       StructElement
