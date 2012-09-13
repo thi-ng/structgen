@@ -1,7 +1,7 @@
 (ns structgen.parser
   (:require
-  	[net.cgrand.parsley :as p]
-  	[clojure.string :as string]))
+  	[net.cgrand.parsley :as p :only [parser]]
+  	[clojure.string :as string :only [replace]]))
 
 (def c-ws #"\s+")
 (def c-symbol #"[a-zA-Z_][\w]*")

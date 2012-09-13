@@ -10,15 +10,76 @@
     [java.text SimpleDateFormat]
     [java.util Date])
   (:require
-    [gloss [core :as gc] [io :as gio]]
-    [clojure.data.dependency :as dep])
-  (:use
-    [structgen protocols align]))
+    [gloss
+      [core :as gc :only [compile-frame ordered-map sizeof]]
+      [io :as gio :only [encode decode]]]
+    [clojure.data.dependency :as dep]))
+
+(defprotocol StructElement
+  "Defines common functionality for primitives, primitive vectors,
+  arrays and composite types (structs)."
+  (cdeclare [this id]
+    "Returns the C declaration for this element and given symbol id.
+    E.g. `float x[100];`")
+  (cname [this]
+    "Returns the element's C type name.")
+  (compile-type [this]
+    "Returns an element's compiled gloss frame.
+    Where applicable chooses endianess based on current `*config*` setting.")
+  (element-type [this]
+    "Returns the element type `StructField` implementation.")
+  (length [this]
+    "Returns the element's array length (zero for single values).")
+  (primitive? [this]
+    "Returns true if element is not a struct.")
+  (prim-type [this])
+  (sizeof [this]
+    "Returns byte size of compiled element.")
+  (template [this] [this all?]
+    "Returns the element's data template: map for structs, vector for arrays"))
+
+(defprotocol Struct
+  "Defines functionality only available for composite types (structs)."
+  (encode [this m]
+    "Encodes the map `m` into a byte buffer. Missing values are replaced
+    with values from the template.")
+  (decode [this bytes]
+    "Decodes a byte buffer into map with structure defined by the struct.")
+  (dependencies [this] [this g]
+    "Returns the graph of all transitive dependencies for this struct.
+    Use clojure.data.dependency for further analysis.")
+  (struct-spec [this]
+    "Returns a map of field names and StructElement or Struct implementations
+    for the given struct.")
+  (gen-source* [this]
+    "Generates C source for the typedef of this struct.")
+  (gen-source [this]
+    "Builds a dependency graph and generates C source for the typedef of
+    this struct and all required dependencies (in correct order)."))
+
+(defn ceil-multiple-of
+  "Rounds up `b` to a multiple of `a`."
+  [a b]
+  (let [r (rem b a)] (if (zero? r) b (- (+ b a) r))))
+
+(defn ceil-power2
+  [x]
+  (loop [pow2 1]
+    (if (>= pow2 x)
+      pow2
+      (recur (* pow2 2)))))
+
+(defn opencl-alignment
+  [e offset]
+  (ceil-multiple-of (ceil-power2 (sizeof (prim-type e))) offset))
+
+(defn packed-alignment
+  [e offset] offset)
 
 (def ^:dynamic *config*
   {:le true
    :align-fn opencl-alignment
-   :struct-align 8})
+   :stride 16})
 
 (defmacro with-config
   [config & body]
@@ -230,22 +291,25 @@
 
 (defn build-spec*
   [fields]
-  (let[[spec offset]
+  (let[{:keys [align-fn stride]} *config*
+       [spec offset total]
        (reduce
-         (fn [[m offset] [id t len]]
+         (fn [[m offset total] [id t len]]
            (if-let [e (get @*registry* t)]
              (let [e (if (and len (pos? len)) (element-array* e len) e)
                    s (sizeof e)
-                   align (if (pos? offset) ((:align-fn *config*) e offset) 0)
+                   align (if (pos? offset) (align-fn e offset) 0)
                    gap (- align offset)]
-               (prn id "size" s "offset" offset "align" align "g" gap)
-               [(conj m (merge (build-align-spec* gap) {:id id :element e})) (+ align s)])
+               ;(prn id "size" s "offset" offset "align" align "g" gap)
+               [(conj m (merge (build-align-spec* gap) {:id id :element e}))
+                (+ align (ceil-power2 s))
+                (+ align s)])
              (throw (IllegalArgumentException. (str "unknown type " t)))))
-         [[] 0] fields)
-       block-fill (- (ceil-multiple-of (:struct-align *config*) offset) offset)]
+         [[] 0 0] fields)
+       block-fill (- (ceil-multiple-of stride total) total)]
+    ;(prn (ceil-multiple-of stride offset) offset total block-fill)
     (if (pos? block-fill)
-      (do (prn "block" block-fill)
-      (concat spec [(build-align-spec* block-fill)]))
+      (concat spec [(build-align-spec* block-fill)])
       spec)))
 
 (defn build-template*
