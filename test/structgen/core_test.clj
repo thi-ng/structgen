@@ -1,7 +1,8 @@
 (ns structgen.core-test
-  (:use clojure.test structgen.core))
+  (:use
+    clojure.test
+    [structgen core protocols]))
 
-;(dosync (ref-set *registry* (make-registry)))
 (reset-registry!)
 
 (register!
@@ -13,8 +14,13 @@
 (println (gen-source (lookup :RSpec)))
 
 (deftest test-encode-decode
-  (let [buf (encode (lookup :RSpec)
-                    {:cam {:pos {:z 400} :up {:y 1}}
-                     :mouse {:x 200 :y 200}
-                     :col [1 1 0 0.5]})]
-    (decode (lookup :RSpec) buf)))
+  (let [rspec (lookup :RSpec)
+        data {:cam {:pos {:z 400} :up {:y 1}}
+              :mouse {:x 200 :y 200}
+              :light [{:x 1 :y 2 :z 3}]
+              :col [1 1 0 0.5]}
+        buf (encode rspec data)]
+    (is = (deep-merge-with
+            merge-with-template
+            (template rspec)
+            (decode (lookup :RSpec) buf)))))

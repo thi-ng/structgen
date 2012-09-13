@@ -1,66 +1,26 @@
 (ns structgen.core
   "Utilities to seamlessly work with native C structs.
-  Provides a C typedef parser and extensible struct generators
-  for converting between Clojure maps and memory aligned
+  Provides extensible struct generators with customizable
+  alignment for converting between Clojure maps and
   byte buffers. Supports nested structs, arrays, custom C
   primitives (e.g as used by OpenCL) and endianess.
   Can generate C source from Clojure defined structs."
   ^{:author "Karsten Schmidt"}
   (:import
     [java.text SimpleDateFormat]
-    [java.util Date]
-    [java.nio ByteBuffer])
+    [java.util Date])
   (:require
     [gloss [core :as gc] [io :as gio]]
-    [clojure.data.dependency :as dep]))
+    [clojure.data.dependency :as dep])
+  (:use
+    [structgen protocols align]))
 
-(def ^:dynamic *config* {:le true :align 4})
+(def ^:dynamic *config* {:le true :align opencl-alignment})
 
 (defmacro with-config
   [config & body]
   `(binding [*config* (merge *config* ~config)]
      (do ~@body)))
-
-(defprotocol StructElement
-  "Defines common functionality for primitives, primitive vectors,
-  arrays and composite types (structs)."
-  (cdeclare [this id]
-    "Returns the C declaration for this element and given symbol id.
-    E.g. `float x[100];`")
-  (cname [this]
-    "Returns the element's C type name.")
-  (compile-type [this]
-    "Returns an element's compiled gloss frame.
-    Where applicable chooses endianess based on current `*config*` setting.")
-  (element-type [this]
-    "Returns the element type `StructField` implementation.")
-  (length [this]
-    "Returns the element's array length (zero for single values).")
-  (primitive? [this]
-    "Returns true if element is not a struct.")
-  (sizeof [this]
-    "Returns byte size of compiled element.")
-  (template [this] [this all?]
-    "Returns the element's data template: map for structs, vector for arrays"))
-
-(defprotocol Struct
-  "Defines functionality only available for composite types (structs)."
-  (encode ^ByteBuffer [this m]
-    "Encodes the map `m` into a byte buffer. Missing values are replaced
-    with values from the template.")
-  (decode [this bytes]
-    "Decodes a byte buffer into map with structure defined by the struct.")
-  (dependencies [this] [this g]
-    "Returns the graph of all transitive dependencies for this struct.
-    Use clojure.data.dependency for further analysis.")
-  (struct-spec [this]
-    "Returns a map of field names and StructElement or Struct implementations
-    for the given struct.")
-  (gen-source* [this]
-    "Generates C source for the typedef of this struct.")
-  (gen-source [this]
-    "Builds a dependency graph and generates C source for the typedef of
-    this struct and all required dependencies (in correct order)."))
 
 (defn primitive*
   "Returns a `StructElement` implementation for the given primitive type description:
@@ -78,9 +38,10 @@
         (if (> size 1)
           (keyword (str (name type) (if (:le *config*) "-le" "-be")))
           type)))
-    (element-type [this] type)
+    (element-type [this] this)
     (length [this] 0)
     (primitive? [this] true)
+    (prim-type [this] this)
     (sizeof [this] size)
     (template [this] 0)
     (template [this _] 0)))
@@ -112,6 +73,7 @@
     (element-type [this] type)
     (length [this] len)
     (primitive? [this] true)
+    (prim-type [this] this)
     (sizeof [this] (* len (sizeof type)))
     (template [this] (template this true))
     (template [this _] (vec (repeat len 0)))))
@@ -131,21 +93,31 @@
       (element-type [this] e)
       (length [this] len)
       (primitive? [this] (primitive? e))
+      (prim-type [this] (prim-type e))
       (sizeof [this] (* len (sizeof e)))
       (template [this] (template this false))
       (template [this all?] (vec (repeat len (template e all?)))))))
 
 (defn make-registry
-  "Builds a vanilla type registry populated only with primitive types."
+  "Builds a vanilla type registry populated only with standard C
+  and OpenCL primitive types."
   [& specs]
-  {:char (primitive* "char" :byte 1)
-   :uchar (primitive* "unsigned char" :ubyte 1)
-   :short (primitive* "short" :int16 2)
-   :ushort (primitive* "unsigned short" :uint16 2)
-   :int (primitive* "int" :int32 4)
-   :uint (primitive* "unsigned int" :uint32 4)
-   :float (primitive* "float" :float32 4)
-   :double (primitive* "double" :float64 8)})
+  (let [prims {:char (primitive* "char" :byte 1)
+               :uchar (primitive* "unsigned char" :ubyte 1)
+               :short (primitive* "short" :int16 2)
+               :ushort (primitive* "unsigned short" :uint16 2)
+               :int (primitive* "int" :int32 4)
+               :uint (primitive* "unsigned int" :uint32 4)
+               :long (primitive* "long" :int64 8)
+               :ulong (primitive* "unsigned long" :uint64 8)
+               :float (primitive* "float" :float32 4)
+               :double (primitive* "double" :float64 8)}
+        primvecs (for [t [:float :char :uchar :short :ushort
+                          :int :uint :long :ulong]
+                       n [2 3 4 8 16]]
+                   (let [tname (str (name t) n)]
+                     {(keyword tname) (primitive-vec* tname (t prims) n)}))]
+    (apply merge prims primvecs)))
 
 (def ^:dynamic *registry* (ref (make-registry)))
 
@@ -245,31 +217,27 @@
     (nil? data) tpl
     :default data))
 
-(defn ceil-multiple-of
-  "Rounds up `b` to a multiple of `a`."
-  [a b]
-  (let [r (rem b a)] (if (zero? r) b (- (+ b a) r))))
-
 (defn build-align-spec*
-  [gap]
-  (when (pos? gap)
-    {:gid (keyword (gensym "sg__"))
-     :gcode (gc/compile-frame (repeat gap :byte))
-     :gdata (vec (repeat gap 0))}))
+  [len]
+  (into {}
+    (when (pos? len)
+      {:gid (keyword (gensym "_align__"))
+       :gcode (gc/compile-frame (repeat len :byte))
+       :gdata (vec (repeat len 0))})))
 
 (defn build-spec*
   [fields]
-  (map
-    (fn [[id t len]]
+  (first (reduce
+    (fn [[m offset] [id t len]]
       (if-let [e (get @*registry* t)]
         (let [e (if (and len (pos? len)) (element-array* e len) e)
               s (sizeof e)
-              align (:align *config*)
-              stride (if (pos? align) (ceil-multiple-of align s) s)
-              gap (- stride s)]
-          (merge {:id id :element e} (build-align-spec* gap)))
+              align (if (pos? offset) ((:align *config*) e offset) 0)
+              gap (- align offset)]
+          (prn id "size" s "offset" offset "align" align "g" gap)
+          [(conj m (merge (build-align-spec* gap) {:id id :element e})) (+ align s)])
         (throw (IllegalArgumentException. (str "unknown type " t)))))
-    fields))
+    [[] 0] fields)))
 
 (defn build-template*
   [spec]
@@ -283,7 +251,7 @@
   (reduce
     (fn [acc {:keys [id element gid gcode]}]
       (if gid
-        (conj acc id (compile-type element) gid gcode)
+        (conj acc gid gcode id (compile-type element))
         (conj acc id (compile-type element))))
     [] spec))
 
@@ -311,12 +279,13 @@
       (element-type [this] this)
       (length [this] 0)
       (primitive? [this] false)
+      (prim-type [this] this)
       (sizeof [this] size)
       (template [this] (template this false))
       (template [this all?]
         (if all? tpl (deep-select-keys tpl this)))
       Struct
-      (encode ^ByteBuffer [this m]
+      (encode [this m]
         (first (gio/encode frame (deep-merge-with merge-with-template tpl m))))
       (decode [this bytes]
         (deep-select-keys (gio/decode frame bytes) this))
