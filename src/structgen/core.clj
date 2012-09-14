@@ -43,8 +43,10 @@
   (encode [this m]
     "Encodes the map `m` into a byte buffer. Missing values are replaced
     with values from the template.")
-  (decode [this bytes]
-    "Decodes a byte buffer into map with structure defined by the struct.")
+  (decode [this bytes] [this bytes filter?]
+    "Decodes a byte buffer into map with structure as defined by the struct.
+    If filter? is truthy the returned map will only contain data fields and
+    has any alignment fields removed. Disabled by default.")
   (dependencies [this] [this g]
     "Returns the graph of all transitive dependencies for this struct.
     Use clojure.data.dependency for further analysis.")
@@ -253,6 +255,8 @@
     maps))
 
 (defn deep-select-keys
+  "Recursively selects only keys from map `m` matching the given struct spec.
+  This function is used internally by `decode` to exclude any alignment keys."
   [m struct]
   (reduce
     (fn [m [k v]]
@@ -271,13 +275,13 @@
   [tpl data]
   (cond
     (sequential? tpl)
-    (let [ct (count tpl) cd (count data)]
-      (if (every? map? [(first tpl) (first data)])
-        (map (fn [a b] (deep-merge-with merge-with-template a b))
-             tpl (concat (take ct data) (drop cd tpl)))
-        (if (< cd ct)
-          (concat data (drop cd tpl))
-          (take ct data))))
+      (let [ct (count tpl) cd (count data)]
+        (if (every? map? [(first tpl) (first data)])
+          (map (fn [a b] (deep-merge-with merge-with-template a b))
+               tpl (concat (take ct data) (drop cd tpl)))
+          (if (< cd ct)
+            (concat data (drop cd tpl))
+            (take ct data))))
     (nil? data) tpl
     :default data))
 
@@ -362,8 +366,11 @@
       Struct
       (encode [this m]
         (first (gio/encode frame (deep-merge-with merge-with-template tpl m))))
-      (decode [this bytes]
-        (deep-select-keys (gio/decode frame bytes) this))
+      (decode [this bytes] (gio/decode frame bytes))
+      (decode [this bytes filter?]
+        (if filter?
+          (deep-select-keys (gio/decode frame bytes) this)
+          (gio/decode frame bytes)))
       (dependencies [this]
         (dependencies this (dep/graph)))
       (dependencies [this g]
