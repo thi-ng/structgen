@@ -5,5 +5,5 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"
             :distribution :repo}
   :dependencies [[org.clojure/clojure "1.4.0"]
-                 [gloss "0.2.2-beta1"]
+                 [gloss "0.2.1"]
                  [net.cgrand/parsley "0.9.1"]])
