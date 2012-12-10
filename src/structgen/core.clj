@@ -1,7 +1,7 @@
 (ns structgen.core
   "Utilities to seamlessly work with native C structs.
-  Provides extensible struct generators with customizable
-  alignment for converting between Clojure maps and
+  Provides extensible struct generators and customizable
+  alignment logic for converting between Clojure maps and
   byte buffers. Supports nested structs, arrays, custom C
   primitives (e.g as used by OpenCL) and endianess.
   Can generate C source from Clojure defined structs."
@@ -13,7 +13,7 @@
     [gloss
       [core :as gc :only [compile-frame ordered-map sizeof]]
       [io :as gio :only [encode decode]]]
-    [clojure.data.dependency :as dep]))
+    [clojure.tools.namespace.dependency :as dep]))
 
 (defprotocol StructElement
   "Defines common functionality for primitives, primitive vectors,
@@ -59,6 +59,56 @@
     "Builds a dependency graph and generates C source for the typedef of
     this struct and all required dependencies (in correct order)."))
 
+;; # Helper fns
+
+(defn deep-merge-with
+  "Like merge-with, but merges maps recursively, applying the given fn
+  only when there's a non-map at a particular level.
+
+      (deep-merge-with +
+        {:a {:b {:c 1 :d {:x 1 :y 2}} :e 3} :f 4}
+        {:a {:b {:c 2 :d {:z 9} :z 3} :e 100}})
+      => {:a {:b {:z 3, :c 3, :d {:z 9, :x 1, :y 2}}, :e 103}, :f 4}"
+  ^{:author "Chris Houser"}
+  [f & maps]
+  (apply
+    (fn m [& maps]
+      (if (every? map? maps)
+        (apply merge-with m maps)
+        (apply f maps)))
+    maps))
+
+(defn deep-select-keys
+  "Recursively selects only keys from map `m` matching the given struct spec.
+  This function is used internally by `decode` to exclude any alignment keys."
+  [m struct]
+  (reduce
+    (fn [m [k v]]
+      (if-let [ks (k (struct-spec struct))]
+        (assoc m k
+          (cond
+            (map? v)
+              (deep-select-keys v ks)
+            (and (sequential? v) (not (primitive? ks)))
+              (map #(deep-select-keys % (element-type ks)) v)
+            :default v))
+        m))
+    {} m))
+
+(defn merge-with-template
+  [tpl data]
+  (cond
+    (sequential? tpl)
+      (let [ct (count tpl) cd (count data)]
+        (if (every? map? [(first tpl) (first data)])
+          (map (fn [a b] (deep-merge-with merge-with-template a b))
+               tpl (concat (take ct data) (drop cd tpl)))
+          (if (< cd ct)
+            (concat data (drop cd tpl))
+            (take ct data))))
+    (nil? data) tpl
+    :default data))
+
 (defn ceil-multiple-of
   "Rounds up `b` to a multiple of `a`."
   [a b]
@@ -88,12 +138,14 @@
   `(binding [*config* (merge *config* ~config)]
      (do ~@body)))
 
+;; # C primitive datatype handling
+
 (defn primitive*
   "Returns a `StructElement` implementation for the given primitive type description:
 
       cname - C type name
       type - gloss codec type
-      size - size in bytes" 
+      size - size in bytes"
   [cname type size]
   (reify
     StructElement
@@ -116,7 +168,7 @@
   "Returns a `StructElement` implementation for the given vector primitive type description.
   E.g. OpenCL extends C with vector prims like `float4` which technically are like arrays,
   but differ in their C declarations:
-  
+
       float x[4]; // 4-element C array
       float4 x; // float4 primitive
 
@@ -163,6 +215,8 @@
       (sizeof [this] (* len (sizeof e)))
       (template [this] (template this false))
       (template [this all?] (vec (repeat len (template e all?)))))))
+
+;; # Type registration
 
 (defn make-registry
   "Builds a vanilla type registry populated only with standard C
@@ -215,7 +269,7 @@
   registers a number of structs for the given specs.
   Throws IllegalArgumentException for duplicate IDs.
   Returns the last type registered.
-  
+
   Each spec is a vector of: `[typename & fields]`
 
       ; declare a primitive OpenCL type
@@ -237,59 +291,13 @@
       (dosync (alter *registry* assoc id type)))
     type))
 
-(defn deep-merge-with
-  "Like merge-with, but merges maps recursively, applying the given fn
-  only when there's a non-map at a particular level.
-
-      (deep-merge-with +
-        {:a {:b {:c 1 :d {:x 1 :y 2}} :e 3} :f 4}
-        {:a {:b {:c 2 :d {:z 9} :z 3} :e 100}})
-      => {:a {:b {:z 3, :c 3, :d {:z 9, :x 1, :y 2}}, :e 103}, :f 4}"
-  ^{:author "Chris Houser"}
-  [f & maps]
-  (apply
-    (fn m [& maps]
-      (if (every? map? maps)
-        (apply merge-with m maps)
-        (apply f maps)))
-    maps))
-
-(defn deep-select-keys
-  "Recursively selects only keys from map `m` matching the given struct spec.
-  This function is used internally by `decode` to exclude any alignment keys."
-  [m struct]
-  (reduce
-    (fn [m [k v]]
-      (if-let [ks (k (struct-spec struct))]
-        (assoc m k 
-          (cond
-            (map? v)
-              (deep-select-keys v ks)
-            (and (sequential? v) (not (primitive? ks)))
-              (map #(deep-select-keys % (element-type ks)) v)
-            :default v))
-        m))
-    {} m))
-
-(defn merge-with-template
-  [tpl data]
-  (cond
-    (sequential? tpl)
-      (let [ct (count tpl) cd (count data)]
-        (if (every? map? [(first tpl) (first data)])
-          (map (fn [a b] (deep-merge-with merge-with-template a b))
-               tpl (concat (take ct data) (drop cd tpl)))
-          (if (< cd ct)
-            (concat data (drop cd tpl))
-            (take ct data))))
-    (nil? data) tpl
-    :default data))
+;; # Struct generation
 
 (defn build-align-spec*
   [len]
   (into {}
     (when (pos? len)
-      {:gid (keyword (gensym "_align__"))
+      {:gid (keyword (gensym "sg_align__"))
        :gcode (gc/compile-frame (repeat len :byte))
        :gdata (vec (repeat len 0))})))
 
@@ -311,7 +319,6 @@
              (throw (IllegalArgumentException. (str "unknown type " t)))))
          [[] 0 0] fields)
        block-fill (- (ceil-multiple-of stride total) total)]
-    ;(prn (ceil-multiple-of stride offset) offset total block-fill)
     (if (pos? block-fill)
       (concat spec [(build-align-spec* block-fill)])
       spec)))
@@ -390,6 +397,7 @@
       (gen-source [this]
         (let [g (dependencies this)
               deps (dep/transitive-dependencies g this)
-              sorted-deps (vec (dep/topo-sort g (vec (into #{this} deps))))]
+              sorted-deps (vec (dep/topo-sort g))
+              sorted-deps (if (seq sorted-deps) sorted-deps [this])]
           (apply str (header) (map gen-source* sorted-deps))))
       (struct-spec [this] spec-map))))
