@@ -1,4 +1,6 @@
 (ns structgen.parser
+  "Basic C struct/typedef parser functions."
+  ^{:author "Karsten Schmidt"}
   (:require
   	[net.cgrand.parsley :as p :only [parser]]
   	[clojure.string :as string :only [replace]]))
@@ -40,7 +42,6 @@
 
 (defn preprocess
   ([src & {:as userdefs}]
-    (prn userdefs)
     (let [defines (re-seq c-define src)]
       (reduce
         (fn[s [o d r]]
