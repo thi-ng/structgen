@@ -62,13 +62,13 @@ Now we should have four new datatypes available in our registry and can start wo
     (template (lookup :Cam))
     ; {:eye {:x 0, :y 0, :z 0}, :target {:x 0, :y 0, :z 0}, :up {:x 0, :y 0, :z 0}}
 
-Templates are used during encoding & decoding to ensure a valid data structure even if user data given is incomplete as in the following example where we've omitted the :target vector and only defined the :y key of the :up vector field. User data is always merged with the template during encoding:
+Templates are used during encoding & decoding to ensure a valid data structure even if the user data given is incomplete, as in the following example where we've omitted the `:target` vector and only defined the `:y` key of the `:up` vector field. User data is always merged with the template during encoding:
 
     :::clojure
     (def buf (encode (lookup :Cam) {:eye {:x 100 :y 200 :z 300} :up {:y 1}}))
     ; #'user/buf
 
-Our camera definition is now encoded in a NIO ByteBuffer. Decoding this buffer with the correct struct type results again in a standard Clojure map:
+Our camera definition is now encoded in a Java NIO HeapByteBuffer. Decoding this buffer with the correct struct type results again in a standard Clojure map:
 
     :::clojure
     (decode (lookup :Cam) buf)
@@ -76,7 +76,7 @@ Our camera definition is now encoded in a NIO ByteBuffer. Decoding this buffer w
     ;  :target {:sg_align__6977 [0 0 0 0], :z 0.0, :y 0.0, :x 0.0},
     ;  :eye {:sg_align__6977 [0 0 0 0], :z 300.0, :y 200.0, :x 100.0}}
 
-Keys with the `:sg_align__` prefix in the map above identify the automatically generated filler blocks used to achieve correct memory alignment. These can also be suppressed by passing an additional `true` arg to the `decode` fn (though filtering them out can be much slower):
+Keys with the `:sg_align__` prefix in the map above, identify the automatically generated filler blocks used to achieve correct memory alignment. These can also be suppressed by passing an additional `true` arg to the `decode` fn (though filtering them out can be much slower):
 
     :::clojure
     (decode (lookup :Cam) buf true)
@@ -92,14 +92,14 @@ To get a better idea about the internals of our data structures (e.g. memory req
       (into {}))
     ; {:faces {:size 64000, :cname "Face"}, :transform {:size 64, :cname "float"}, :id {:size 4, :cname "int"}}
 
-Last but not least, we can also define new structs directly in Clojure (no need for C source) using simple type specs
+Last but not least, we can also define new structs directly in Clojure (no need for C source) using simple type specs:
 
     :::clojure
     (register! :ColFace (make-struct 'ColFace [:verts :float3 3] [:color :uint]))
     ; or
     (register! [[:ColFace [:verts :float3 3] [:color :uint]]])
 
-If we then later need to use this struct from C, we can generate the necessary header files like this:
+If we then later need to use this struct from C, we can generate the necessary header file like this:
 
     :::clojure
     (spit "mesh.h" (gen-source (lookup :Mesh)))
