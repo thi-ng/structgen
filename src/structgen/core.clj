@@ -122,11 +122,11 @@
       (recur (* pow2 2)))))
 
 (defn opencl-alignment
-  [e offset]
-  (ceil-multiple-of (ceil-power2 (sizeof (prim-type e))) offset))
+  [e offset stride]
+  (ceil-multiple-of (min stride (ceil-power2 (sizeof (prim-type e)))) offset))
 
 (defn packed-alignment
-  [e offset] offset)
+  [e offset stride] offset)
 
 (def ^:dynamic *config*
   {:le true
@@ -212,7 +212,7 @@
       (length [this] len)
       (primitive? [this] (primitive? e))
       (prim-type [this] (prim-type e))
-      (sizeof [this] (* len (sizeof e)))
+      (sizeof [this] (ceil-power2 (* len (sizeof e))))
       (template [this] (template this false))
       (template [this all?] (vec (repeat len (template e all?)))))))
 
@@ -310,11 +310,11 @@
            (if-let [e (get @*registry* t)]
              (let [e (if (and len (pos? len)) (element-array* e len) e)
                    s (sizeof e)
-                   align (if (pos? offset) (align-fn e offset) 0)
+                   align (if (pos? offset) (align-fn e offset stride) 0)
                    gap (- align offset)]
-               ;(prn id "size" s "offset" offset "align" align "g" gap)
+               ;(prn id "size" s "offset" (format "%03x" offset) "align" (format "%03x" align) "g" gap)
                [(conj m (merge (build-align-spec* gap) {:id id :element e}))
-                (+ align (ceil-power2 s))
+                (+ align s)
                 (+ align s)])
              (throw (IllegalArgumentException. (str "unknown type " t)))))
          [[] 0 0] fields)
