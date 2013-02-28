@@ -1,4 +1,4 @@
-(defproject com.postspectacular/structgen "0.1.1"
+(defproject com.postspectacular/structgen "0.1.2"
   :description "Interop library for working with native C structs and binary formats in general."
   :url "http://hg.postspectacular.com/structgen"
   :license {:name "Eclipse Public License"
