@@ -1,4 +1,4 @@
-(ns structgen.core
+(ns thi.ng.structgen.core
   "Utilities to seamlessly work with native C structs.
   Provides extensible struct generators and customizable
   alignment logic for converting between Clojure maps and
@@ -10,10 +10,9 @@
     [java.text SimpleDateFormat]
     [java.util Date])
   (:require
-    [gloss
-      [core :as gc :only [compile-frame ordered-map sizeof]]
-      [io :as gio :only [encode decode]]]
-    [clojure.tools.namespace.dependency :as dep]))
+    [gloss.core :as gc]
+    [gloss.io :as gio]
+    [com.stuartsierra.dependency :as dep]))
 
 (defprotocol StructElement
   "Defines common functionality for primitives, primitive vectors,

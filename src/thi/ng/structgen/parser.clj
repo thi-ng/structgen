@@ -1,9 +1,9 @@
-(ns structgen.parser
+(ns thi.ng.structgen.parser
   "Basic C struct/typedef parser functions."
   ^{:author "Karsten Schmidt"}
   (:require
-  	[net.cgrand.parsley :as p :only [parser]]
-  	[clojure.string :as string :only [replace]]))
+  	[net.cgrand.parsley :as p]
+  	[clojure.string :as str]))
 
 (def c-ws #"\s+")
 (def c-symbol #"[a-zA-Z_][\w]*")
@@ -46,8 +46,8 @@
       (reduce
         (fn[s [o d r]]
           (-> s
-            (string/replace o "")
-            (string/replace d (str (get userdefs (keyword d) r)))))
+            (str/replace o "")
+            (str/replace d (str (get userdefs (keyword d) r)))))
         src defines))))
 
 (def parser
