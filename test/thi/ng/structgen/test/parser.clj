@@ -42,7 +42,7 @@
 
   (def rspec (sg/register! (p/parse-specs src)))
 
-  (println (sg/gen-source rspec))
+  (println (sg/generate-source rspec))
 
   (prn (sg/decode
         rspec

@@ -1,0 +1,177 @@
+* thi.ng/structgen
+
+A Clojure library for seamless working with native C structs &
+structured byte buffers.
+
+Structgen has the following features so far:
+
+- parsing of typedefs from C source files
+- dependency graph for nested structs
+- C source code generation for registered types (incl. automatic dependencies)
+- representation of C structs as standard Clojure data structures (maps & vectors)
+- customizable per-field decoders to convert buffer data back to Clojure
+- customizable memory alignment logic for struct fields (defaults to
+  OpenCL alignment, inserts filler bytes where necessary)
+- extensible type registry, pre-configured with common C & OpenCL primitives
+
+Currently *not* supported:
+
+- No self-recursive structs
+- No pointer struct fields
+
+Structgen is making use of [[https://github.com/ztellman/gloss][ztellman's gloss library]] to encode/decode
+structs into/from byte buffers.
+
+** Leiningen coordinates
+
+#+BEGIN_SRC clojure
+  [thi.ng/structgen "0.3.0"]
+#+END_SRC
+
+** Usage
+
+#+BEGIN_SRC clojure :noweb-ref example
+  (use '[thi.ng.structgen core parser])
+
+  (reset-registry!)
+  (register!
+   (parse-specs
+    "typedef struct {
+       float x;
+       float y;
+       float z;
+     } Vec3;
+
+     typedef struct {
+       Vec3 eye;
+       Vec3 target;
+       Vec3 up;
+     } Cam;
+
+     typedef struct {
+       Vec3 a;
+       Vec3 b;
+       Vec3 c;
+       Vec3 normal;
+     } Face;
+
+     typedef struct {
+       int id;
+       float transform[16];
+       Face faces[1000];
+     } Mesh;"))
+#+END_SRC
+         
+Now we should have four new datatypes available in our registry and
+can start working with them:
+
+#+BEGIN_SRC clojure :noweb-ref example
+(template (lookup :Cam))
+;; {:eye {:x 0, :y 0, :z 0}, :target {:x 0, :y 0, :z 0}, :up {:x 0, :y 0, :z 0}}
+#+END_SRC
+
+Templates are used during encoding & decoding to ensure a valid data
+structure even if the user data given is incomplete, as in the
+following example where we've omitted the `:target` vector and only
+defined the `:y` key of the `:up` vector field. User data is always
+merged with the template during encoding:
+
+#+BEGIN_SRC clojure :noweb-ref example
+  (def buf (encode (lookup :Cam) {:eye {:x 100 :y 200 :z 300} :up {:y 1}}))
+#+END_SRC
+
+Our camera definition is now encoded in a Java NIO HeapByteBuffer.
+Decoding this buffer with the correct struct type results again in a
+standard Clojure map:
+
+#+BEGIN_SRC clojure :noweb-ref example
+  (decode (lookup :Cam) buf)
+  ;; {:up {:sg_align__6977 [0 0 0 0], :z 0.0, :y 1.0, :x 0.0},
+  ;;  :target {:sg_align__6977 [0 0 0 0], :z 0.0, :y 0.0, :x 0.0},
+  ;;  :eye {:sg_align__6977 [0 0 0 0], :z 300.0, :y 200.0, :x 100.0}}
+#+END_SRC
+
+Keys with the `:sg_align__` prefix in the map above, identify the
+automatically generated filler blocks used to achieve correct memory
+alignment. These can also be suppressed by passing an additional
+`true` arg to the `decode` fn (though filtering them out can be much
+slower):
+
+#+BEGIN_SRC clojure :noweb-ref example
+  (decode (lookup :Cam) buf true)
+  ;; {:eye {:x 100.0, :y 200.0, :z 300.0},
+  ;;  :target {:x 0.0, :y 0.0, :z 0.0},
+  ;;  :up {:x 0.0, :y 1.0, :z 0.0}}
+#+END_SRC
+
+To get a better idea about the internals of our data structures (e.g.
+memory requirements, field types), we can also inspect them:
+
+#+BEGIN_SRC clojure :noweb-ref example
+  (->> :Mesh
+       (lookup)
+       (struct-spec)
+       (map
+        (fn [[k v]]
+          (let [e (:element v)]
+            [k {:size (sizeof e) :cname (cname e)}])))
+       (into {}))
+  ;; {:faces {:size 64000, :cname "Face"},
+  ;;  :transform {:size 64, :cname "float"},
+  ;;  :id {:size 4, :cname "int"}}
+#+END_SRC
+    
+Last but not least, we can also define new structs directly in Clojure
+(no need for C source) using simple type specs:
+
+#+BEGIN_SRC clojure :noweb-ref example
+  (register! :ColFace (make-struct 'ColFace [:verts :float3 3] [:color :uint]))
+  ;; or
+  (register! [[:ColFace [:verts :float3 3] [:color :uint]]])
+#+END_SRC
+
+If we later need to use a struct from C, we can generate the necessary
+header file like this (this will also include any other referred
+typedefs):
+
+#+BEGIN_SRC clojure :noweb-ref example
+  (spit "mesh.h" (generate-source (lookup :Mesh)))
+#+END_SRC
+
+** Overriding default Clojure serializations
+
+Under some circumstances it might be useful to de-serialize binary
+structs to custom Clojure datastructures, rather than the default
+vectors & maps. For example, we might want to use [[http://thi.ng/geom][thi.ng/geom]]'s =Vec3=
+type as Clojure target for all OpenCL =float3= values. In this case,
+this can be done by overriding the default =float3= spec with a
+customized version:
+
+#+BEGIN_SRC clojure
+  ;; thi.ng/geom must be manually added as dependency (not included w/ structgen)
+  (require '[thi.ng.geom.core.vector :as v])
+
+  (register! :float3 (make-primitive-vec :float3 (lookup :float) 3 v/vec3))
+  (register! [[:Triangle [:a :float3] [:b :float3] [:c :float3]]])
+
+  (->> (encode (lookup :Triangle) {:a (v/vec3 1 2 3)})
+       (decode (lookup :Triangle))
+       :a
+       type)
+  ;; thi.ng.geom.core.vector.Vec3
+#+END_SRC
+
+** Tangling
+
+When tangled with Emacs & org-mode, the code snippets in this file
+will be written to a file =example.clj= in the project root.
+
+#+BEGIN_SRC clojure :tangle example.clj :noweb yes :padline no
+  <<example>>
+#+END_SRC
+
+** License
+
+Copyright © 2012 - 2015 Karsten Schmidt
+
+Distributed under the Apache Software License 2.0

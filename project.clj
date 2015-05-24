@@ -1,4 +1,4 @@
-(defproject thi.ng/structgen "0.2.1"
+(defproject thi.ng/structgen "0.3.0-SNAPSHOT"
   :description  "Interop library for working with native C structs and binary formats in general."
   :url          "http://thi.ng/structgen"
   :license      {:name "Apache Software License 2.0"

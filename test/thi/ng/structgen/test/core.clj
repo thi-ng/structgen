@@ -12,7 +12,7 @@
     [:Camera [:pos :Vec3] [:target :Vec3] [:up :Vec3]]
     [:RSpec  [:cam :Camera] [:light :Vec3 8] [:mouse :Vec2] [:col :float 4]]]))
 
-(println (sg/gen-source rspec))
+(println (sg/generate-source rspec))
 
 (deftest test-encode-decode
   (let [data {:cam   {:pos {:z 400} :up {:y 1}}
