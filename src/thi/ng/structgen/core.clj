@@ -296,7 +296,7 @@
   [len]
   (into {}
     (when (pos? len)
-      {:gid (keyword (gensym "sg_align__"))
+      {:gid (keyword "thi.ng.structgen.core" (gensym "sg_align__"))
        :gcode (gc/compile-frame (repeat len :byte))
        :gdata (vec (repeat len 0))})))
 
